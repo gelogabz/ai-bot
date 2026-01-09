@@ -1,5 +1,12 @@
 import os
 
+# Try to import google.genai types for schema declaration; tests/envs
+# without the package should still be able to import this module.
+try:
+    from google.genai import types
+except Exception:
+    types = None
+
 
 def get_files_info(working_directory, directory="."):
     try:
@@ -27,3 +34,22 @@ def get_files_info(working_directory, directory="."):
         return "\n".join(items)
     except Exception as e:
         return f'Error: {e}'
+
+
+if types is not None:
+    # Schema for LLM function declaration
+    schema_get_files_info = types.FunctionDeclaration(
+        name="get_files_info",
+        description="Lists files in a specified directory relative to the working directory, providing file size and directory status",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "directory": types.Schema(
+                    type=types.Type.STRING,
+                    description="Directory path to list files from, relative to the working directory (default is the working directory itself)",
+                ),
+            },
+        ),
+    )
+else:
+    schema_get_files_info = None
