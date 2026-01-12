@@ -1,10 +1,18 @@
 import os
 
+# Try to import google.genai types for schema declaration; tests/envs
+# without the package should still be able to import this module.
+try:
+    from google.genai import types
+except Exception:
+    types = None
+
 
 def write_file(working_directory, file_path, content):
     try:
         working_dir_abs = os.path.abspath(working_directory)
-        target_path = os.path.normpath(os.path.join(working_dir_abs, file_path))
+        target_path = os.path.normpath(
+            os.path.join(working_dir_abs, file_path))
 
         # Ensure target_path is inside working_directory
         if os.path.commonpath([working_dir_abs, target_path]) != working_dir_abs:
@@ -32,3 +40,25 @@ def write_file(working_directory, file_path, content):
         return f'Successfully wrote to "{file_path}" ({len(content)} characters written)'
     except Exception as e:
         return f'Error: {e}'
+
+
+if types is not None:
+    schema_write_file = types.FunctionDeclaration(
+        name="write_file",
+        description="Writes content to a file (creates or overwrites) relative to the working directory",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "file_path": types.Schema(
+                    type=types.Type.STRING,
+                    description="Path to the file to write, relative to the working directory",
+                ),
+                "content": types.Schema(
+                    type=types.Type.STRING,
+                    description="String content to write to the file",
+                ),
+            },
+        ),
+    )
+else:
+    schema_write_file = None

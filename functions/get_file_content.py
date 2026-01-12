@@ -1,5 +1,12 @@
 import os
 
+# Try to import google.genai types for schema declaration; tests/envs
+# without the package should still be able to import this module.
+try:
+    from google.genai import types
+except Exception:
+    types = None
+
 MAX_CHARS = 10000
 
 
@@ -27,3 +34,21 @@ def get_file_content(working_directory, file_path):
             return f'Error: {e}'
     except Exception as e:
         return f'Error: {e}'
+
+
+if types is not None:
+    schema_get_file_content = types.FunctionDeclaration(
+        name="get_file_content",
+        description="Reads and returns the contents of a file relative to the working directory, truncating very large files",
+        parameters=types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "file_path": types.Schema(
+                    type=types.Type.STRING,
+                    description="Path to the file to read, relative to the working directory",
+                ),
+            },
+        ),
+    )
+else:
+    schema_get_file_content = None

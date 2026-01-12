@@ -1,10 +1,11 @@
 import os
 import argparse
+import sys
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 from prompts import system_prompt
-from functions.call_function import available_functions
+from functions.call_function import available_functions, call_function
 
 load_dotenv()
 api_key = os.environ.get("GEMINI_API_KEY")
@@ -31,70 +32,101 @@ def main():
     messages = [types.Content(role="user", parts=[types.Part(text=prompt)])]
 
     try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=messages,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                temperature=0,
-                tools=[available_functions],
-            ),
-        )
-
-        # Verify usage metadata is present
-        usage = getattr(response, "usage_metadata", None)
-        if usage is None:
-            raise RuntimeError(
-                "Gemini API response missing usage metadata; request may have failed."
+        # Allow the model to iterate with tool calls until it returns a final answer.
+        for _ in range(20):
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=messages,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0,
+                    tools=[available_functions],
+                ),
             )
 
-        # Helper to extract token counts from either dict-like or object-like usage
-        def _get_token(u, *names):
-            for name in names:
-                if isinstance(u, dict):
-                    val = u.get(name)
+            # Verify usage metadata is present
+            usage = getattr(response, "usage_metadata", None)
+            if usage is None:
+                raise RuntimeError(
+                    "Gemini API response missing usage metadata; request may have failed."
+                )
+
+            # Helper to extract token counts from either dict-like or object-like usage
+            def _get_token(u, *names):
+                for name in names:
+                    if isinstance(u, dict):
+                        val = u.get(name)
+                    else:
+                        val = getattr(u, name, None)
+                    if val is not None:
+                        return val
+                return None
+
+            prompt_tokens = _get_token(
+                usage, "prompt_tokens", "input_tokens", "prompt_token_count")
+            response_tokens = _get_token(
+                usage, "response_tokens", "completion_tokens", "response_token_count")
+
+            # Add model candidates to history so the model can see its own outputs
+            candidates = getattr(response, "candidates", None)
+            if candidates:
+                for cand in candidates:
+                    messages.append(cand.content)
+
+            # Handle any function calls the model requested
+            function_calls = getattr(response, "function_calls", None)
+
+            if args.verbose:
+                print(f"User prompt: {prompt}")
+                if prompt_tokens is None:
+                    print("Prompt tokens: unknown")
                 else:
-                    val = getattr(u, name, None)
-                if val is not None:
-                    return val
-            return None
+                    print(f"Prompt tokens: {prompt_tokens}")
 
-        prompt_tokens = _get_token(
-            usage, "prompt_tokens", "input_tokens", "prompt_token_count")
-        response_tokens = _get_token(
-            usage, "response_tokens", "completion_tokens", "response_token_count")
+                if response_tokens is None:
+                    print("Response tokens: unknown")
+                else:
+                    print(f"Response tokens: {response_tokens}")
 
-        # Print verbose metadata only if requested
-        function_calls = getattr(response, "function_calls", None)
+                print("Response:")
 
-        if args.verbose:
-            print(f"User prompt: {prompt}")
-
-            if prompt_tokens is None:
-                print("Prompt tokens: unknown")
-            else:
-                print(f"Prompt tokens: {prompt_tokens}")
-
-            if response_tokens is None:
-                print("Response tokens: unknown")
-            else:
-                print(f"Response tokens: {response_tokens}")
-
-            print("Response:")
             if function_calls:
+                function_responses = []
                 for function_call in function_calls:
-                    print(
-                        f"Calling function: {function_call.name}({function_call.args})")
-            else:
+                    function_call_result = call_function(
+                        function_call, verbose=args.verbose)
+
+                    if not getattr(function_call_result, "parts", None):
+                        raise RuntimeError("call_function returned no parts")
+
+                    part = function_call_result.parts[0]
+                    if getattr(part, "function_response", None) is None:
+                        raise RuntimeError(
+                            "function_response is missing from part")
+
+                    if getattr(part.function_response, "response", None) is None:
+                        raise RuntimeError(
+                            "function_response.response is missing")
+
+                    function_responses.append(part)
+
+                    if args.verbose:
+                        print(f"-> {part.function_response.response}")
+
+                # Append the function results as a user message so the model sees them
+                messages.append(types.Content(
+                    role="user", parts=function_responses))
+                # Continue the loop to let the model react to the tool results
+                continue
+
+            # No function calls => final assistant response
+            if not function_calls:
                 print(response.text)
+                break
+
         else:
-            # Non-verbose: only print the model response or function calls
-            if function_calls:
-                for function_call in function_calls:
-                    print(
-                        f"Calling function: {function_call.name}({function_call.args})")
-            else:
-                print(response.text)
+            print("Maximum iterations reached without a final response.")
+            sys.exit(1)
     except Exception as e:
         print("Request to Gemini API failed:", e)
         raise
